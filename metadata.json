@@ -1,0 +1,6 @@
+{
+  "name": "ELSEPA Simulation Suite",
+  "description": "An interactive workstation for Dirac partial-wave elastic scattering calculations of electrons and positrons. Features a physical simulator, custom CSV/XLSX plotter with range zooming, and a Gemini physicist assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
