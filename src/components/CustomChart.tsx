@@ -1027,16 +1027,16 @@ export default function CustomChart({
             )}
 
             {/* Custom Uploads tooltip rendering */}
-            {hoverData.uploads.map((up) => (
-              <div key={up.name} className="flex items-center justify-between gap-4">
+            {hoverData.uploads.map((up, idx) => (
+              <div key={`${up.name}-${idx}`} className="flex items-center justify-between gap-4">
                 <span style={{ color: up.color }}>{up.name}:</span>
                 <span>{up.val.toExponential(4)}</span>
               </div>
             ))}
 
             {/* Custom Profiles tooltip rendering */}
-            {hoverData.profiles?.map((p) => (
-              <div key={p.name} className="flex items-center justify-between gap-4">
+            {hoverData.profiles?.map((p, idx) => (
+              <div key={`${p.name}-${idx}`} className="flex items-center justify-between gap-4">
                 <span style={{ color: p.color }}>{p.name}:</span>
                 <span>{p.val.toExponential(4)}</span>
               </div>
