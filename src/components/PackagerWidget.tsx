@@ -78,24 +78,35 @@ export default function PackagerWidget() {
           </p>
         </div>
 
-        <button
-          id="packager-download-package-btn"
-          onClick={handleDownloadAll}
-          disabled={!template || downloading}
-          className="flex items-center justify-center gap-2 px-4.5 py-2 text-xs font-bold text-[#090a0f] bg-[#c5a059] hover:bg-[#dfba73] disabled:opacity-50 border border-[#c5a059] rounded-xl cursor-pointer transition shadow-[0_4px_12px_rgba(197,160,89,0.2)] duration-200"
-        >
-          {success ? (
-            <>
-              <CheckCircle className="w-4 h-4 text-emerald-950" />
-              Downloaded Configuration!
-            </>
-          ) : (
-            <>
-              <Download className="w-4 h-4" />
-              {downloading ? "Formatting..." : "Download Desktop Wrapper Files"}
-            </>
-          )}
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <a
+            href="/api/desktop/download-zip"
+            download
+            className="flex items-center justify-center gap-2 px-4.5 py-2 text-xs font-bold text-[#090a0f] bg-[#c5a059] hover:bg-[#dfba73] border border-[#c5a059] rounded-xl cursor-pointer transition shadow-[0_4px_12px_rgba(197,160,89,0.3)] duration-200"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Download Complete App (ZIP)
+          </a>
+
+          <button
+            id="packager-download-package-btn"
+            onClick={handleDownloadAll}
+            disabled={!template || downloading}
+            className="flex items-center justify-center gap-2 px-4 py-2 text-xs font-bold text-gray-300 hover:text-white bg-transparent hover:bg-white/5 border border-[#222430] rounded-xl cursor-pointer transition duration-200"
+          >
+            {success ? (
+              <>
+                <CheckCircle className="w-3.5 h-3.5 text-emerald-400" />
+                Downloaded Config
+              </>
+            ) : (
+              <>
+                <Download className="w-3.5 h-3.5" />
+                {downloading ? "Formatting..." : "Only Configs"}
+              </>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Intro features grid */}
@@ -118,9 +129,9 @@ export default function PackagerWidget() {
 
         <div className="border border-[#222430] bg-[#090a0f]/45 p-4 rounded-xl flex flex-col gap-2">
           <HardDrive className="w-5 h-5 text-amber-500 shrink-0" />
-          <h4 className="text-xs font-bold text-white font-serif tracking-wide">Full Cloud Run Syncing</h4>
+          <h4 className="text-xs font-bold text-white font-serif tracking-wide">Full Offline Autonomy</h4>
           <p className="text-[11px] text-[#94a3b8] leading-normal">
-            All physics algorithms, solvers, Excel plots, and Gemini engines update instantly inside your desktop container shell.
+            Runs 100% locally with zero internet, zero cloud dependencies, and zero Google sign-up prompts.
           </p>
         </div>
       </div>
@@ -129,42 +140,31 @@ export default function PackagerWidget() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mt-2">
         <div className="lg:col-span-5 flex flex-col gap-3">
           <h3 className="text-xs font-bold text-[#c5a059] uppercase tracking-wider select-none font-serif">
-            🚀 3-Step Binaries Compilation
+            🚀 Running Fully offline Local Desktop App
           </h3>
 
           <ol className="list-decimal list-inside text-xs text-gray-300 flex flex-col gap-3 leading-relaxed">
             <li>
-              <strong>Download Configuration</strong>: Click the blue button above to save the preconfigured wrapper folder contents (<code className="font-mono text-[#dfba73] font-bold bg-[#090a0f] border border-[#222430] px-1 rounded">package.json</code>, <code className="font-mono text-[#dfba73] font-bold bg-[#090a0f] border border-[#222430] px-1 rounded">main.js</code>, and <code className="font-mono text-[#dfba73] font-bold bg-[#090a0f] border border-[#222430] px-1 rounded">README.md</code>) in a single directory named <code className="font-mono bg-[#090a0f] border border-[#222430] px-1 rounded text-white">elsepa-desktop/</code> on your computer.
+              <strong>Download Complete App ZIP</strong>: Click the gold <strong>"Download Complete App (ZIP)"</strong> button at the top-right of this card to save the entire source structure, including front-end, solver calculations and custom dev environment files.
             </li>
             <li>
-              <strong>Install Dependencies</strong>: Open your terminal inside that directory and execute:
+              <strong>Install Offline Dependencies</strong>: Open your terminal inside that extracted directory and execute:
               <pre className="mt-2 bg-[#090a0f] text-[#33ff33]/85 border border-[#222430] p-2.5 rounded-lg font-mono text-[10px] select-all leading-normal">
                 npm install
               </pre>
             </li>
             <li>
-              <strong>Compile Portable Executable</strong>: Trigger the final bundler script:
-              <div className="flex flex-col gap-1.5 mt-2">
-                <span className="text-[10px] text-gray-400 font-bold">FOR WINDOWS (.exe):</span>
-                <pre className="bg-[#090a0f] text-[#33ff33]/85 border border-[#222430] p-2 rounded-lg font-mono text-[10px] select-all leading-none">
-                  npm run package-win
-                </pre>
-                <span className="text-[10px] text-gray-400 font-bold mt-1">FOR MACOS (.app):</span>
-                <pre className="bg-[#090a0f] text-[#33ff33]/85 border border-[#222430] p-2 rounded-lg font-mono text-[10px] select-all leading-none">
-                  npm run package-mac
-                </pre>
-              </div>
+              <strong>Launch Desktop App</strong>: Start your fully independent locally-hosted Electron lab:
+              <pre className="mt-2 bg-[#090a0f] text-[#c5a059] border border-[#222430] p-2.5 rounded-lg font-mono text-[10px] select-all leading-normal">
+                npm run desktop
+              </pre>
             </li>
           </ol>
 
-          <div className="flex items-start gap-1 bg-amber-950/20 text-amber-300 border border-amber-900/30 p-3 rounded-lg text-xs leading-normal mt-2">
-            <HelpCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <div className="flex items-start gap-1 bg-emerald-950/20 text-emerald-300 border border-emerald-900/30 p-3 rounded-lg text-xs leading-normal mt-2">
+            <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <div>
-              <strong>Note:</strong> The downloaded configuration automatically sets the source URL to: <br />
-              <span className="font-mono font-bold select-all bg-[#090a0f] border border-[#222430] px-1 rounded text-[10.5px] text-[#dfba73]">
-                {template?.appUrl || "http://localhost:3000"}
-              </span>
-              . Any updates made in this workspace will sync directly with your desktop executable client!
+              <strong>Pure Offline Independence:</strong> This method spins up the local Express backend on your port <code className="font-mono bg-[#090a0f] px-1 rounded text-white">3000</code>. It requires **no authentication, no Google accounts, and runs 100% locally**.
             </div>
           </div>
         </div>

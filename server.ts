@@ -5,6 +5,7 @@ import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { execSync } from "child_process";
 import fs from "fs";
+import AdmZip from "adm-zip";
 import { runScatteringSimulation, PERIODIC_TABLE } from "./src/utils/physicsSolver";
 import { SimulationParams, DataPoint, PhaseShiftPoint } from "./src/types";
 
@@ -241,17 +242,15 @@ async function startServer() {
 
   // API Route: Serve pre-packaged Desktop Wrapper configuration (JSON/scripts)
   app.get("/api/desktop/template", (req, res) => {
-    const appUrl = process.env.APP_URL || "http://localhost:3000";
-    
-    // Serve a JSON configuration with all files needed for the desktop wrapper
+    // Serve a JSON configuration with all files needed for the desktop wrapper that runs completely locally
     res.json({
-      appName: "ELSEPA Simulation Suite",
-      appUrl: appUrl,
+      appName: "ELSEPA Desktop Lab",
+      appUrl: "http://localhost:3000",
       files: {
         "package.json": JSON.stringify({
           name: "elsepa-desktop-client",
           version: "1.0.0",
-          description: "Portable Desktop Client Wrapper for ELSEPA Online Simulation Suite",
+          description: "Portable Independent Local Desktop Client for ELSEPA Simulation Suite",
           main: "main.js",
           scripts: {
             "start": "electron .",
@@ -268,27 +267,129 @@ async function startServer() {
         }, null, 2),
         "main.js": `const { app, BrowserWindow, Menu } = require('electron');
 const path = require('path');
+const { spawn } = require('child_process');
+const http = require('http');
 
 let mainWindow;
+let serverProcess;
+
+function startLocalServer() {
+  const isWin = process.platform === 'win32';
+  const fs = require('fs');
+  const serverPath = path.join(__dirname, 'dist', 'server.cjs');
+  const serverExists = fs.existsSync(serverPath);
+
+  if (serverExists) {
+    console.log('[Electron] Starting local production server from dist/server.cjs...');
+    serverProcess = spawn('node', [serverPath], {
+      cwd: __dirname,
+      env: { ...process.env, NODE_ENV: 'production', PORT: '3000' }
+    });
+  } else {
+    console.log('[Electron] Compiled production bundle not found. Starting local development server using tsx...');
+    const npxCmd = isWin ? 'npx.cmd' : 'npx';
+    serverProcess = spawn(npxCmd, ['tsx', 'server.ts'], {
+      cwd: __dirname,
+      env: { ...process.env, NODE_ENV: 'development', PORT: '3000' }
+    });
+  }
+
+  serverProcess.stdout.on('data', (data) => {
+    console.log('[Local Server Output]: ' + data);
+  });
+
+  serverProcess.stderr.on('data', (data) => {
+    console.error('[Local Server Error]: ' + data);
+  });
+}
+
+function pollLocalServerAndLoad(url, attempts = 0) {
+  if (attempts > 60) {
+    console.error('Failed to connect to local ELSEPA backend server on port 3000.');
+    app.quit();
+    return;
+  }
+  
+  http.get(url, (res) => {
+    if (res.statusCode === 200) {
+      mainWindow.loadURL(url);
+    } else {
+      setTimeout(() => pollLocalServerAndLoad(url, attempts + 1), 200);
+    }
+  }).on('error', () => {
+    setTimeout(() => pollLocalServerAndLoad(url, attempts + 1), 200);
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 850,
-    title: "ELSEPA Online Simulation Suite",
+    title: "ELSEPA Desktop Simulation Lab",
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: true
     },
-    icon: path.join(__dirname, 'icon.png')
+    backgroundColor: '#090a0f'
   });
 
-  // Load the hosted application URL
-  mainWindow.loadURL("${appUrl}");
+  // Start the offline local backend automatically
+  startLocalServer();
 
-  // Adjust menu settings
-  Menu.setApplicationMenu(null); // Optional: hide menus for a clean desktop feel
+  // Load integrated elegant offline loading indicator
+  mainWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(\`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>ELSEPA Lab Loading</title>
+      <style>
+        body {
+          background-color: #090a0f;
+          color: #94a3b8;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          height: 100vh;
+          margin: 0;
+        }
+        .spinner {
+          border: 3px solid #222430;
+          border-top: 3px solid #c5a059;
+          border-radius: 50%;
+          width: 36px;
+          height: 36px;
+          animation: spin 1s linear infinite;
+          margin-bottom: 20px;
+        }
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        h2 {
+          color: white;
+          font-weight: 500;
+          margin-bottom: 8px;
+        }
+        p {
+          font-size: 13px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="spinner"></div>
+      <h2>Starting Native ELSEPA Desktop Lab</h2>
+      <p>Initializing offline-independent physics solver server on local port 3000...</p>
+    </body>
+    </html>
+  \`));
+
+  // Poll local server and present the full UI inside Electron once port is ready with no sign-ins!
+  pollLocalServerAndLoad("http://localhost:3000");
+
+  Menu.setApplicationMenu(null);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -298,6 +399,9 @@ function createWindow() {
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
+  if (serverProcess) {
+    serverProcess.kill();
+  }
   if (process.platform !== 'darwin') {
     app.quit();
   }
@@ -309,27 +413,29 @@ app.on('activate', () => {
   }
 });
 `,
-        "README.md": `# ELSEPA Online Suite - Desktop App Wrapper
+        "README.md": `# ELSEPA Desktop Suite - Offline Independent Wrapper
 
-This directory contains the necessary wrapper scripts to package the **ELSEPA Online Simulation Suite** into a single, fully native and portable desktop executable (.exe or .app) for Windows, macOS, or Linux.
+This directory contains the necessary Electron configuration to package the **ELSEPA Online Simulation Suite** into a completely local, offline-independent desktop application for Windows, macOS, or Linux.
+
+This configuration automatically launches the local Node.js Express server on port 3000 upon startup, compiles and runs the native Fortran binaries, and renders the frontend with zero connections to the cloud. **There are no Google accounts, sign-ups, or internet dependencies required.**
 
 ## Requirements
-- Node.js (with npm) installed on your machine.
-- No other dependencies are required as they are packaged automatically!
+- Node.js (with npm) installed on your system.
+- \`gfortran\` compiler (recommended, to run native Dirac/Schrödinger solver instead of TS emulator).
 
-## Quick Setup
+## Quick Setup & Start
 
-1. **Install electron dependencies**:
+1. **Install dependencies**:
    \`\`\`bash
    npm install
    \`\`\`
 
-2. **Launch development client**:
+2. **Launch the offline client**:
    \`\`\`bash
    npm start
    \`\`\`
 
-3. **Compile to a single portable executable**:
+3. **Package as portable executable files**:
    - **For Windows**:
      \`\`\`bash
      npm run package-win
@@ -343,10 +449,57 @@ This directory contains the necessary wrapper scripts to package the **ELSEPA On
      npm run package-linux
      \`\`\`
 
-The packaged application will be generated in the \`dist/\` folder. You can copy the executable anywhere and launch it instantly! No terminal, no manual compilation or path configurations required.
+Your executable is saved under \`dist/\`. Copy it anywhere and execute it instantly with zero friction!
 `
       }
     });
+  });
+
+  // API Route: Download complete source directory as ZIP for fully-offline local Electron lab
+  app.get("/api/desktop/download-zip", (req, res) => {
+    try {
+      const zip = new AdmZip();
+      const rootDir = process.cwd();
+
+      // Add single files
+      const singleFiles = [
+        "package.json",
+        "vite.config.ts",
+        "tsconfig.json",
+        "index.html",
+        "server.ts",
+        "electron-main.cjs",
+        ".gitignore",
+        "elsepa_solver.f90"
+      ];
+
+      for (const file of singleFiles) {
+        const filePath = path.join(rootDir, file);
+        if (fs.existsSync(filePath)) {
+          zip.addLocalFile(filePath);
+        }
+      }
+
+      // Add folders recursively
+      const folders = ["src", "assets"];
+      for (const folder of folders) {
+        const folderPath = path.join(rootDir, folder);
+        if (fs.existsSync(folderPath)) {
+          zip.addLocalFolder(folderPath, folder);
+        }
+      }
+
+      const zipBuffer = zip.toBuffer();
+      res.set({
+        "Content-Type": "application/zip",
+        "Content-Disposition": "attachment; filename=elsepa-desktop-lab.zip",
+        "Content-Length": zipBuffer.length
+      });
+      res.send(zipBuffer);
+    } catch (err: any) {
+      console.error("Failed to generate offline zip:", err);
+      res.status(500).json({ error: "Failed to generate ZIP archive: " + err.message });
+    }
   });
 
   // Serve static files in production, use Vite middleware in dev
