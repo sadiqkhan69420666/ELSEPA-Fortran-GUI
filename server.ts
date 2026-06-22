@@ -145,8 +145,17 @@ async function startServer() {
   app.post("/api/simulate", (req, res) => {
     try {
       const params = req.body as SimulationParams;
-      if (!params || !params.atomicNumber || !params.energy) {
+      if (!params || (!params.atomicNumber && params.mode !== "compound") || !params.energy) {
         return res.status(400).json({ error: "Missing required simulation parameters." });
+      }
+
+      if (params.mode === "compound") {
+        console.log("[Fortran Engine] Resolving compound simulation via Independent Atom Approximation (IAA).");
+        const result = runScatteringSimulation(params);
+        return res.json({
+          ...result,
+          engine: "composite_iaa_emulated"
+        });
       }
 
       const element = PERIODIC_TABLE.find(el => el.number === params.atomicNumber) || PERIODIC_TABLE[5];

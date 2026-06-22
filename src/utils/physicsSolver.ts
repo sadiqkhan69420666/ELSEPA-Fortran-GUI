@@ -2,7 +2,76 @@
  * Physics Solver & Emulator for ELSEPA Elastic Scattering
  */
 
-import { ElementData, SimulationParams, SimulationResult, DataPoint, PhaseShiftPoint } from "../types";
+import { ElementData, SimulationParams, SimulationResult, DataPoint, PhaseShiftPoint, PresetCompound } from "../types";
+
+// Nice pre-defined common target compounds for physics simulations
+export const PRESET_COMPOUNDS: PresetCompound[] = [
+  {
+    name: "Water",
+    formula: "H2O",
+    atoms: [
+      { symbol: "H", atomicNumber: 1, stoichiometry: 2 },
+      { symbol: "O", atomicNumber: 8, stoichiometry: 1 }
+    ]
+  },
+  {
+    name: "Carbon Dioxide",
+    formula: "CO2",
+    atoms: [
+      { symbol: "C", atomicNumber: 6, stoichiometry: 1 },
+      { symbol: "O", atomicNumber: 8, stoichiometry: 2 }
+    ]
+  },
+  {
+    name: "Silicon Dioxide (Quartz)",
+    formula: "SiO2",
+    atoms: [
+      { symbol: "Si", atomicNumber: 14, stoichiometry: 1 },
+      { symbol: "O", atomicNumber: 8, stoichiometry: 2 }
+    ]
+  },
+  {
+    name: "Gallium Arsenide",
+    formula: "GaAs",
+    atoms: [
+      { symbol: "Ga", atomicNumber: 31, stoichiometry: 1 },
+      { symbol: "As", atomicNumber: 33, stoichiometry: 1 }
+    ]
+  },
+  {
+    name: "Titanium Dioxide",
+    formula: "TiO2",
+    atoms: [
+      { symbol: "Ti", atomicNumber: 22, stoichiometry: 1 },
+      { symbol: "O", atomicNumber: 8, stoichiometry: 2 }
+    ]
+  },
+  {
+    name: "Sodium Chloride (Salt)",
+    formula: "NaCl",
+    atoms: [
+      { symbol: "Na", atomicNumber: 11, stoichiometry: 1 },
+      { symbol: "Cl", atomicNumber: 17, stoichiometry: 1 }
+    ]
+  },
+  {
+    name: "Ethanol",
+    formula: "C2H6O",
+    atoms: [
+      { symbol: "C", atomicNumber: 6, stoichiometry: 2 },
+      { symbol: "H", atomicNumber: 1, stoichiometry: 6 },
+      { symbol: "O", atomicNumber: 8, stoichiometry: 1 }
+    ]
+  },
+  {
+    name: "Silicon Nitride",
+    formula: "Si3N4",
+    atoms: [
+      { symbol: "Si", atomicNumber: 14, stoichiometry: 3 },
+      { symbol: "N", atomicNumber: 7, stoichiometry: 4 }
+    ]
+  }
+];
 
 // Standard atomic data for elements H (Z=1) to Lw (Z=103)
 export const PERIODIC_TABLE: ElementData[] = [
@@ -147,6 +216,127 @@ function legendreAll(Lmax: number, x: number): { P: number[], dP: number[] } {
  * a synthetic quantum partial-wave phase shift generator to output extremely realistic curves.
  */
 export function runScatteringSimulation(params: SimulationParams): SimulationResult {
+  // --- CHEMICAL COMPOUND WORKSPACE (IAA) ---
+  if (params.mode === "compound" && params.compoundAtoms && params.compoundAtoms.length > 0) {
+    // 1. Solve single element simulation for each compound atom
+    const subResults = params.compoundAtoms.map(atom => {
+      const elData = PERIODIC_TABLE.find(el => el.number === atom.atomicNumber) || PERIODIC_TABLE[5];
+      const singleParams: SimulationParams = {
+        ...params,
+        mode: "single",
+        atomicNumber: atom.atomicNumber
+      };
+      return {
+        stoichiometry: atom.stoichiometry,
+        element: elData,
+        result: runScatteringSimulation(singleParams)
+      };
+    });
+
+    // 2. Synthesize composite quantities under Independent Atom Approximation (IAA)
+    const combinedDcsData: DataPoint[] = [];
+    let combinedTotalElasticXC = 0.0;
+    let combinedMomentumTransferXC = 0.0;
+
+    // Use wavelength of the first sub-result
+    const deBroglieWavelength = subResults[0]?.result.deBroglieWavelength || 1.0;
+
+    for (let angleDeg = 0; angleDeg <= 180; angleDeg++) {
+      let weightedDcsSum = 0.0;
+      let weightedRutherfordSum = 0.0;
+      let weightedShermanNumer = 0.0;
+
+      subResults.forEach(sub => {
+        const pt = sub.result.dcsData[angleDeg];
+        if (pt) {
+          const wDcs = sub.stoichiometry * pt.dcs;
+          weightedDcsSum += wDcs;
+          weightedRutherfordSum += sub.stoichiometry * pt.dcsRutherford;
+          weightedShermanNumer += wDcs * pt.Sherman;
+        }
+      });
+
+      combinedDcsData.push({
+        angle: angleDeg,
+        dcs: weightedDcsSum,
+        dcsRutherford: weightedRutherfordSum,
+        Sherman: weightedDcsSum > 0 ? weightedShermanNumer / weightedDcsSum : 0
+      });
+    }
+
+    subResults.forEach(sub => {
+      combinedTotalElasticXC += sub.stoichiometry * sub.result.totalElasticCrossSection;
+      combinedMomentumTransferXC += sub.stoichiometry * sub.result.momentumTransferCrossSection;
+    });
+
+    const compoundElement: ElementData = {
+      number: Math.round(params.compoundAtoms.reduce((acc, a) => acc + a.atomicNumber * a.stoichiometry, 0)),
+      symbol: params.compoundFormula || "Compound",
+      name: params.compoundName || "Chemical Compound",
+      mass: params.compoundAtoms.reduce((acc, a) => {
+        const el = PERIODIC_TABLE.find(e => e.number === a.atomicNumber);
+        return acc + (el ? el.mass : 0) * a.stoichiometry;
+      }, 0),
+      category: "compound",
+      group: 0,
+      period: 0,
+      block: ""
+    };
+
+    const formula = params.compoundFormula || "Compound";
+    const name = params.compoundName || "Chemical Compound";
+
+    const elsepaInFile = `#################################################################
+# ELSEPA Compound Input (IAA) generated by Online Simulator #
+# Compound: ${name} (${formula})
+# Constituent elements:
+${subResults.map(sub => `#   - ${sub.element.name} (${sub.element.symbol}, Z=${sub.element.number}), stoichiometry = ${sub.stoichiometry}`).join("\n")}
+# Projectile: ${params.projectile}
+# Energy: ${params.energy} ${params.energyUnit}
+#################################################################
+`;
+
+    const elsepaOutFile = `*****************************************************************
+*                                                               *
+*   ELSEPA -- MOLECULAR COMPOSITE ANALYZER (IAA APPROXIMATION)  *
+*   Independent Atom Approximation elastic scattering solver  *
+*                                                               *
+*****************************************************************
+ Target compound ............. ${name} (${formula})
+ Total virtual charges ........ Z_eff = ${compoundElement.number}
+ Composite atomic weight ...... M_eff = ${compoundElement.mass.toFixed(3)} u
+ Projectile .................. ${params.projectile === "electron" ? "Electrons" : "Positrons"}
+ Energy ...................... ${params.energy} ${params.energyUnit}
+ 
+ COMPOSITION DETAILS:
+${subResults.map(sub => `  * ${sub.element.symbol} (Z=${sub.element.number}, M=${sub.element.mass} u) x ${sub.stoichiometry}
+    Individual sigma_el = ${sub.result.totalElasticCrossSection.toExponential(4)} a0^2
+    Individual sigma_tr = ${sub.result.momentumTransferCrossSection.toExponential(4)} a0^2`).join("\n")}
+
+ INTEGRATED COMPOUND CROSS SECTIONS (IAA):
+  Total elastic cross section (sigma_el) = ${combinedTotalElasticXC.toExponential(6)} a0^2
+  Momentum transfer cross section (sigma_tr) = ${combinedMomentumTransferXC.toExponential(6)} a0^2
+
+ Scattering output generated by linear combination.
+ Execution completed successfully with code 0.
+*****************************************************************
+`;
+
+    return {
+      params,
+      element: compoundElement,
+      dcsData: combinedDcsData,
+      phaseShifts: [], 
+      totalElasticCrossSection: combinedTotalElasticXC,
+      momentumTransferCrossSection: combinedMomentumTransferXC,
+      deBroglieWavelength,
+      elsepaInFile,
+      elsepaOutFile,
+      timestamp: new Date().toLocaleTimeString()
+    };
+  }
+
+  // --- SINGLE ATOM DIRECT WORKSPACE ---
   const element = PERIODIC_TABLE.find(el => el.number === params.atomicNumber) || PERIODIC_TABLE[5]; // Default to Carbon
   const Z = element.number;
 

@@ -5,7 +5,7 @@
  */
 
 import React, { useState, useRef, useEffect, useMemo } from "react";
-import { DataPoint, UploadedDataset } from "../types";
+import { DataPoint, UploadedDataset, SavedProfile } from "../types";
 import { Download, ZoomIn, ZoomOut, RotateCcw, LineChart, Shield, Sparkles } from "lucide-react";
 
 interface CustomChartProps {
@@ -14,6 +14,9 @@ interface CustomChartProps {
   energyText: string;
   uploadedDatasets: UploadedDataset[];
   onToggleDatasetVisibility: (id: string) => void;
+  savedProfiles?: SavedProfile[];
+  onToggleProfileVisibility?: (id: string) => void;
+  onRemoveProfile?: (id: string) => void;
 }
 
 export default function CustomChart({
@@ -21,7 +24,10 @@ export default function CustomChart({
   elementSymbol,
   energyText,
   uploadedDatasets,
-  onToggleDatasetVisibility
+  onToggleDatasetVisibility,
+  savedProfiles = [],
+  onToggleProfileVisibility = () => {},
+  onRemoveProfile = () => {}
 }: CustomChartProps) {
   // Chart Tabs: DCS (Differential Cross Section) vs Sherman (Spin Sherman Coefficient)
   const [activeMetric, setActiveMetric] = useState<"dcs" | "sherman">("dcs");
@@ -49,6 +55,7 @@ export default function CustomChart({
     rutherfordDcs?: number;
     simulatedSherman?: number;
     uploads: { name: string; val: number; color: string }[];
+    profiles: { name: string; val: number; color: string }[];
   } | null>(null);
 
   // Responsive padding
@@ -88,6 +95,14 @@ export default function CustomChart({
         ds.records.forEach(r => {
           const val = parseFloat(r[ds.dcsColumn]);
           if (!isNaN(val) && val > 0) values.push(val);
+        });
+      });
+
+      // Add saved overlay profiles boundaries
+      savedProfiles.filter(p => p.visible).forEach(p => {
+        p.result.dcsData.forEach(d => {
+          const val = d.dcs;
+          if (val > 0) values.push(val);
         });
       });
 
@@ -309,6 +324,32 @@ export default function CustomChart({
     });
   }, [activeUploads, activeMetric, yScaleType, currentXBounds, currentYBounds]);
 
+  // Generate SVG path coordinate line for each overlay saved profile
+  const profilePaths = useMemo(() => {
+    return savedProfiles.filter(p => p.visible).map((p) => {
+      let path = "";
+      let pointCount = 0;
+      p.result.dcsData.forEach((d) => {
+        const val = activeMetric === "dcs" ? d.dcs : d.Sherman;
+        const sx = getX(d.angle);
+        const sy = getY(val);
+
+        if (pointCount === 0) {
+          path = `M ${sx} ${sy}`;
+        } else {
+          path += ` L ${sx} ${sy}`;
+        }
+        pointCount++;
+      });
+      return {
+        id: p.id,
+        name: p.name,
+        color: p.color,
+        path
+      };
+    });
+  }, [savedProfiles, activeMetric, yScaleType, currentXBounds, currentYBounds]);
+
   // Handle Drag Selection Box (Box Zooming)
   const handleMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
     if (!svgRef.current) return;
@@ -368,13 +409,23 @@ export default function CustomChart({
         return { name: ds.name, val: closestRecordVal, color: ds.color };
       });
 
+      // Find closest values in overlaid saved profiles too!
+      const hoverProfiles = savedProfiles.filter(p => p.visible).map(p => {
+        let closestPt = p.result.dcsData.reduce((prev, curr) => {
+          return Math.abs(curr.angle - hoverTheta) < Math.abs(prev.angle - hoverTheta) ? curr : prev;
+        }, p.result.dcsData[0] || { angle: 0, dcs: 1, dcsRutherford: 1, Sherman: 0 });
+        const val = activeMetric === "dcs" ? closestPt.dcs : closestPt.Sherman;
+        return { name: p.name, val, color: p.color };
+      });
+
       setHoverPosition({ x, y });
       setHoverData({
         angle: parseFloat(hoverTheta.toFixed(2)),
         simulatedDcs: closestSimulated.dcs,
         rutherfordDcs: closestSimulated.dcsRutherford,
         simulatedSherman: closestSimulated.Sherman,
-        uploads: hoverUploads
+        uploads: hoverUploads,
+        profiles: hoverProfiles
       });
     } else {
       setHoverPosition(null);
@@ -830,6 +881,22 @@ export default function CustomChart({
             )
           ))}
 
+          {/* Overlaid Saved Profiles paths */}
+          {profilePaths.map((pp) => (
+            pp.path && (
+              <path
+                key={pp.id}
+                d={pp.path}
+                fill="none"
+                stroke={pp.color}
+                strokeWidth="2.0"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="transition-all"
+              />
+            )
+          ))}
+
           {/* Visual Overlay selection dragging box (Box Zooming bounds UI) */}
           {isDragging && dragStart && dragEnd && (
             <rect
@@ -911,6 +978,15 @@ export default function CustomChart({
                 </text>
               </g>
             ))}
+
+            {profilePaths.map((pp, idx) => (
+              <g key={pp.id} transform={`translate(0, ${48 + (uploadedPaths.length + idx) * 16})`}>
+                <line x1="0" y1="-3" x2="14" y2="-3" stroke={pp.color} strokeWidth="2" />
+                <text x="20" y="1" className="font-sans text-[10px] font-semibold truncate w-24" fill="#e2e8f0">
+                  {pp.name.length > 15 ? `${pp.name.substring(0, 12)}...` : pp.name}
+                </text>
+              </g>
+            ))}
           </g>
         </svg>
 
@@ -955,6 +1031,14 @@ export default function CustomChart({
               <div key={up.name} className="flex items-center justify-between gap-4">
                 <span style={{ color: up.color }}>{up.name}:</span>
                 <span>{up.val.toExponential(4)}</span>
+              </div>
+            ))}
+
+            {/* Custom Profiles tooltip rendering */}
+            {hoverData.profiles?.map((p) => (
+              <div key={p.name} className="flex items-center justify-between gap-4">
+                <span style={{ color: p.color }}>{p.name}:</span>
+                <span>{p.val.toExponential(4)}</span>
               </div>
             ))}
           </div>
@@ -1004,6 +1088,27 @@ export default function CustomChart({
             />
             <span className="truncate w-full block" style={{ color: ds.color }}>
               Show {ds.name}
+            </span>
+          </label>
+        ))}
+
+        {/* Saved overlaid overlay profile visibilities */}
+        {savedProfiles.map((p) => (
+          <label
+            key={p.id}
+            id={`label-overlay-visibility-${p.id}`}
+            className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-gray-300"
+          >
+            <input
+              id={`checkbox-overlay-visibility-${p.id}`}
+              type="checkbox"
+              checked={p.visible}
+              onChange={() => onToggleProfileVisibility(p.id)}
+              className="w-4 h-4 border-[#222430] rounded focus:ring-[#c5a059]"
+              style={{ accentColor: p.color }}
+            />
+            <span className="truncate w-full block" style={{ color: p.color }}>
+              Show {p.name}
             </span>
           </label>
         ))}

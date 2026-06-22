@@ -51,6 +51,10 @@ export interface SimulationParams {
   absorptionModel: boolean;
   correlationPolarization: boolean;
   gridPoints: number;
+  mode?: "single" | "compound";
+  compoundFormula?: string;
+  compoundName?: string;
+  compoundAtoms?: { atomicNumber: number; stoichiometry: number }[];
 }
 
 export interface DataPoint {
@@ -68,7 +72,7 @@ export interface PhaseShiftPoint {
 
 export interface SimulationResult {
   params: SimulationParams;
-  element: ElementData;
+  element: ElementData; // For compounds, this can represent a virtual element descriptor
   dcsData: DataPoint[];
   phaseShifts: PhaseShiftPoint[];
   totalElasticCrossSection: number; // in a0^2 or cm^2
@@ -90,4 +94,19 @@ export interface UploadedDataset {
   shermanColumn?: string;
   color: string;
   visible: boolean;
+}
+
+export interface PresetCompound {
+  name: string;
+  formula: string;
+  atoms: { symbol: string; atomicNumber: number; stoichiometry: number }[];
+}
+
+export interface SavedProfile {
+  id: string;
+  name: string;
+  color: string;
+  visible: boolean;
+  params: SimulationParams;
+  result: SimulationResult;
 }
