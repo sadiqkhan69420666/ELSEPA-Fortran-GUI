@@ -371,14 +371,18 @@ async function startServer() {
         if (!fs.existsSync(binaryPath)) {
           console.log("[Fortran Engine] Compiling official ELSEPA (elscata.f)...");
           const compileCmd = isWin
-            ? "gfortran official_elsepa/elscata.f official_elsepa/elsepa.f official_elsepa/elscatm.f official_elsepa/getpath.f -O2 -o elscata.exe"
-            : "gfortran official_elsepa/elscata.f official_elsepa/elsepa.f official_elsepa/elscatm.f official_elsepa/getpath.f -O2 -o elscata";
+            ? "cd official_elsepa && gfortran elscata.f -O2 -o ..\\elscata.exe"
+            : "cd official_elsepa && gfortran elscata.f -O2 -o ../elscata";
           execSync(compileCmd, { cwd: process.cwd(), stdio: "inherit" });
         }
 
-        // Run official elscata with input redirection from elsepa.in
-        const cmd = isWin ? "elscata.exe < elsepa.in" : "./elscata < elsepa.in";
-        execSync(cmd, { cwd: process.cwd(), timeout: 15000 });
+        // Run official elscata using child_process input option for platform-independent redirection safety
+        console.log("[Fortran Engine] Running official elscata binary...");
+        execSync(isWin ? "elscata.exe" : "./elscata", {
+          cwd: process.cwd(),
+          input: inputContent,
+          timeout: 15000
+        });
 
         // Locate and parse the written dcs_*.dat file
         const expectedDcsFilename = getDcsFilename(energyInEv);
