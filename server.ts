@@ -141,6 +141,74 @@ async function startServer() {
     res.json({ status: "ok", time: new Date().toISOString() });
   });
 
+  // API Route: Get list of Fortran files and their contents
+  app.get("/api/elsepa-files", (req, res) => {
+    try {
+      const files = [
+        {
+          name: "elsepa_solver.f90",
+          path: "elsepa_solver.f90",
+          content: fs.existsSync("elsepa_solver.f90") ? fs.readFileSync("elsepa_solver.f90", "utf-8") : ""
+        },
+        {
+          name: "elscata.f",
+          path: "official_elsepa/elscata.f",
+          content: fs.existsSync("official_elsepa/elscata.f") ? fs.readFileSync("official_elsepa/elscata.f", "utf-8") : ""
+        },
+        {
+          name: "elsepa.f",
+          path: "official_elsepa/elsepa.f",
+          content: fs.existsSync("official_elsepa/elsepa.f") ? fs.readFileSync("official_elsepa/elsepa.f", "utf-8") : ""
+        },
+        {
+          name: "elscatm.f",
+          path: "official_elsepa/elscatm.f",
+          content: fs.existsSync("official_elsepa/elscatm.f") ? fs.readFileSync("official_elsepa/elscatm.f", "utf-8") : ""
+        },
+        {
+          name: "getpath.f",
+          path: "official_elsepa/getpath.f",
+          content: fs.existsSync("official_elsepa/getpath.f") ? fs.readFileSync("official_elsepa/getpath.f", "utf-8") : ""
+        }
+      ];
+      return res.json({ files });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // API Route: Save a Fortran file and trigger recompile if it's elsepa_solver.f90
+  app.post("/api/save-elsepa-file", (req, res) => {
+    try {
+      const { filePath, content } = req.body;
+      if (!filePath || content === undefined) {
+        return res.status(400).json({ error: "Missing filePath or content." });
+      }
+
+      // Secure path to avoid directory traversal
+      const resolvedPath = path.resolve(process.cwd(), filePath);
+      if (!resolvedPath.startsWith(process.cwd())) {
+        return res.status(403).json({ error: "Access denied." });
+      }
+
+      fs.writeFileSync(resolvedPath, content, "utf-8");
+
+      // Delete compiled binaries to force gfortran recompilation on next run
+      if (filePath === "elsepa_solver.f90") {
+        const isWin = process.platform === "win32";
+        const binaryPath = path.join(process.cwd(), isWin ? "elsepa_solver.exe" : "elsepa_solver");
+        if (fs.existsSync(binaryPath)) {
+          fs.unlinkSync(binaryPath);
+          console.log("[Fortran Engine] Deleted stale binary to force recompilation.");
+        }
+      }
+
+      return res.json({ success: true, message: `Successfully saved ${filePath}.` });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   // API Route: Run Scattering Simulation (Local Fortran with TS Fallback)
   app.post("/api/simulate", (req, res) => {
     try {

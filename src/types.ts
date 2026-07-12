@@ -5,7 +5,7 @@
 export enum AppTab {
   SIMULATOR = "simulator",
   PLOTTER = "plotter",
-  PACKAGER = "packager",
+  WASM_COMPILER = "wasm_compiler",
   PHYSICS_GUIDE = "guide",
 }
 

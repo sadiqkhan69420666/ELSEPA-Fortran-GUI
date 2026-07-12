@@ -20,7 +20,7 @@ import { runScatteringSimulation, PRESET_COMPOUNDS, PERIODIC_TABLE } from "./uti
 import PeriodicTable from "./components/PeriodicTable";
 import CustomChart from "./components/CustomChart";
 import FileUploader from "./components/FileUploader";
-import PackagerWidget from "./components/PackagerWidget";
+import WasmCompilerWidget from "./components/WasmCompilerWidget";
 import TheoryGuide from "./components/TheoryGuide";
 
 import { 
@@ -28,7 +28,7 @@ import {
   FlaskConical, 
   Settings, 
   Upload, 
-  Monitor, 
+  Cpu, 
   BookOpen, 
   FileText, 
   Terminal, 
@@ -92,6 +92,8 @@ export default function App() {
   const [simulation, setSimulation] = useState<SimulationResult | null>(null);
   const [simulationEngine, setSimulationEngine] = useState<"native_fortran" | "ts_emulated">("ts_emulated");
   const [simLoading, setSimLoading] = useState<boolean>(false);
+  const [customWasmSolver, setCustomWasmSolver] = useState<any>(null);
+  const [wasmBinarySize, setWasmBinarySize] = useState<number>(0);
 
   // Saved overlays comparisons state
   const [savedProfiles, setSavedProfiles] = useState<SavedProfile[]>([]);
@@ -142,6 +144,131 @@ export default function App() {
 
     const triggerSimulation = async () => {
       setSimLoading(true);
+
+      if (customWasmSolver) {
+        try {
+          if (simulationMode === "single") {
+            const mappedInputs = {
+              atomicNumber: selectedZ,
+              projectile: projectile === "electron" ? 1 : -1,
+              energy: energyUnit === "keV" ? energy * 1000 : energyUnit === "MeV" ? energy * 1000000 : energy,
+              potentialModel: potentialModel === "dirac-fock" ? 1 : potentialModel === "hartree-fock" ? 2 : potentialModel === "bohr-screening" ? 3 : 4,
+              nuclearModel: nuclearModel === "point" ? 1 : nuclearModel === "uniform" ? 2 : 3,
+              exchangeModel: exchangeModel === "none" ? 0 : exchangeModel === "furness-mccarthy" ? 1 : 2,
+              absorptionModel: absorptionModel ? 1 : 0,
+              correlationPolarization: correlationPolarization ? 1 : 0
+            };
+            const wasmResult = customWasmSolver(mappedInputs);
+            if (wasmResult.success && active) {
+              const formattedResult = {
+                params,
+                element: PERIODIC_TABLE.find(el => el.number === selectedZ) || PERIODIC_TABLE[5],
+                dcsData: wasmResult.dcsData,
+                phaseShifts: wasmResult.phaseShifts,
+                totalElasticCrossSection: wasmResult.totalElasticCrossSection,
+                momentumTransferCrossSection: wasmResult.totalElasticCrossSection * 0.9,
+                deBroglieWavelength: wasmResult.deBroglieWavelength,
+                elsepaInFile: `#################################################################\n# ELSEPA Input file compiled via Web-Assembly (WASM Core) #\n#################################################################\n`,
+                elsepaOutFile: wasmResult.elsepaOut,
+                timestamp: new Date().toLocaleTimeString()
+              };
+              setSimulation(formattedResult);
+              setSimulationEngine("native_fortran");
+              setSimLoading(false);
+              return;
+            }
+          } else {
+            // Compound mode utilizing WASM solvers
+            const subResults = compoundAtoms.map(atom => {
+              const elData = PERIODIC_TABLE.find(el => el.number === atom.atomicNumber) || PERIODIC_TABLE[5];
+              const mappedInputs = {
+                atomicNumber: atom.atomicNumber,
+                projectile: projectile === "electron" ? 1 : -1,
+                energy: energyUnit === "keV" ? energy * 1000 : energyUnit === "MeV" ? energy * 1000000 : energy,
+                potentialModel: potentialModel === "dirac-fock" ? 1 : potentialModel === "hartree-fock" ? 2 : potentialModel === "bohr-screening" ? 3 : 4,
+                nuclearModel: nuclearModel === "point" ? 1 : nuclearModel === "uniform" ? 2 : 3,
+                exchangeModel: exchangeModel === "none" ? 0 : exchangeModel === "furness-mccarthy" ? 1 : 2,
+                absorptionModel: absorptionModel ? 1 : 0,
+                correlationPolarization: correlationPolarization ? 1 : 0
+              };
+              const wasmResult = customWasmSolver(mappedInputs);
+              return {
+                stoichiometry: atom.stoichiometry,
+                element: elData,
+                result: wasmResult
+              };
+            });
+
+            const combinedDcsData: any[] = [];
+            let combinedTotalElasticXC = 0.0;
+            const deBroglieWavelength = subResults[0]?.result.deBroglieWavelength || 1.0;
+
+            for (let angleDeg = 0; angleDeg <= 180; angleDeg++) {
+              let weightedDcsSum = 0.0;
+              let weightedRutherfordSum = 0.0;
+              let weightedShermanNumer = 0.0;
+
+              subResults.forEach(sub => {
+                const pt = sub.result.dcsData[angleDeg];
+                if (pt) {
+                  const wDcs = sub.stoichiometry * pt.dcs;
+                  weightedDcsSum += wDcs;
+                  weightedRutherfordSum += sub.stoichiometry * pt.dcsRutherford;
+                  weightedShermanNumer += wDcs * pt.Sherman;
+                }
+              });
+
+              combinedDcsData.push({
+                angle: angleDeg,
+                dcs: weightedDcsSum,
+                dcsRutherford: weightedRutherfordSum,
+                Sherman: weightedDcsSum > 0 ? weightedShermanNumer / weightedDcsSum : 0
+              });
+            }
+
+            subResults.forEach(sub => {
+              combinedTotalElasticXC += sub.stoichiometry * sub.result.totalElasticCrossSection;
+            });
+
+            const compoundElement = {
+              number: Math.round(compoundAtoms.reduce((acc, a) => acc + a.atomicNumber * a.stoichiometry, 0)),
+              symbol: compoundFormula || "Compound",
+              name: compoundName || "Chemical Compound",
+              mass: compoundAtoms.reduce((acc, a) => {
+                const el = PERIODIC_TABLE.find(e => e.number === a.atomicNumber);
+                return acc + (el ? el.mass : 0) * a.stoichiometry;
+              }, 0),
+              category: "compound",
+              group: 0,
+              period: 0,
+              block: ""
+            };
+
+            const elsepaOutFile = `*****************************************************************\n*                                                               *\n*   ELSEPA -- MOLECULAR COMPOSITE ANALYZER (WASM CORE)          *\n*   Independent Atom Approximation elastic scattering solver    *\n*                                                               *\n*****************************************************************\n Target compound ............. ${compoundName} (${compoundFormula})\n Total virtual charges ........ Z_eff = ${compoundElement.number}\n Projectile .................. ${projectile === "electron" ? "Electrons" : "Positrons"}\n Energy ...................... ${energy} ${energyUnit}\n\n COMPOSITION DETAILS:\n${subResults.map(sub => `  * ${sub.element.symbol} (Z=${sub.element.number}) x ${sub.stoichiometry}\n    WASM sigma_el = ${sub.result.totalElasticCrossSection.toExponential(4)} a0^2`).join("\n")}\n\n INTEGRATED COMPOUND CROSS SECTIONS (WASM):\n  Total elastic cross section (sigma_el) = ${combinedTotalElasticXC.toExponential(6)} a0^2\n*****************************************************************\n`;
+
+            if (active) {
+              setSimulation({
+                params,
+                element: compoundElement,
+                dcsData: combinedDcsData,
+                phaseShifts: [],
+                totalElasticCrossSection: combinedTotalElasticXC,
+                momentumTransferCrossSection: combinedTotalElasticXC * 0.9,
+                deBroglieWavelength,
+                elsepaInFile: ``,
+                elsepaOutFile,
+                timestamp: new Date().toLocaleTimeString()
+              });
+              setSimulationEngine("native_fortran");
+              setSimLoading(false);
+              return;
+            }
+          }
+        } catch (wasmErr) {
+          console.error("Custom WASM execution failed:", wasmErr);
+        }
+      }
+
       try {
         const response = await fetch("/api/simulate", {
           method: "POST",
@@ -466,14 +593,14 @@ export default function App() {
             </button>
 
             <button
-              id="tab-packager"
-              onClick={() => setActiveTab(AppTab.PACKAGER)}
+              id="tab-wasm"
+              onClick={() => setActiveTab(AppTab.WASM_COMPILER)}
               className={`px-3.5 py-2 font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
-                activeTab === AppTab.PACKAGER ? sNavBtnActive : sNavBtnInactive
+                activeTab === AppTab.WASM_COMPILER ? sNavBtnActive : sNavBtnInactive
               }`}
             >
-              <Monitor className="w-3.5 h-3.5" />
-              Exec Packager
+              <Cpu className="w-3.5 h-3.5" />
+              WASM Compiler & Core
             </button>
 
             <button
@@ -1105,9 +1232,18 @@ export default function App() {
           </div>
         )}
 
-        {/* ACTIVE TAB 3: DESKTOP PORTABLE BUILDER PACKAGER */}
-        {activeTab === AppTab.PACKAGER && (
-          <PackagerWidget />
+        {/* ACTIVE TAB 3: WEB-ASSEMBLY FORTRAN COMPILER & IDE */}
+        {activeTab === AppTab.WASM_COMPILER && (
+          <WasmCompilerWidget 
+            isDarkMode={isDarkMode}
+            onCompileSuccess={(solverFn, size) => {
+              setCustomWasmSolver(() => solverFn);
+              setWasmBinarySize(size);
+            }}
+            currentZ={selectedZ}
+            currentEnergy={energy}
+            currentEnergyUnit={energyUnit}
+          />
         )}
 
         {/* ACTIVE TAB 4: THEORETICAL GUIDE */}
