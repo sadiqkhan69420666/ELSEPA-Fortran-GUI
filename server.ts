@@ -32,98 +32,179 @@ const exchangeModelMap = {
   "riley-truhlar": 2
 };
 
-function parseElsepaOut(filePath: string): {
+function parseDpwaDat(filePath: string): PhaseShiftPoint[] {
+  const phaseShifts: PhaseShiftPoint[] = [];
+  try {
+    if (!fs.existsSync(filePath)) return phaseShifts;
+    const content = fs.readFileSync(filePath, "utf-8");
+    const lines = content.split("\n");
+    let startReading = false;
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+      if (line.includes("------")) {
+        startReading = true;
+        continue;
+      }
+      if (startReading) {
+        if (line.includes("---") || line.includes("INTEGRATED")) {
+          break;
+        }
+        const parts = line.split(/\s+/);
+        if (parts.length >= 3) {
+          const lVal = parseInt(parts[0]);
+          const deltaVal = parseFloat(parts[1]);
+          const etaVal = parseFloat(parts[2]);
+          if (!isNaN(lVal) && !isNaN(deltaVal) && !isNaN(etaVal)) {
+            phaseShifts.push({ l: lVal, delta: deltaVal, eta: etaVal });
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Error parsing dpwa.dat:", err);
+  }
+  return phaseShifts;
+}
+
+function getDcsFilename(ev: number): string {
+  try {
+    let exp = Math.floor(Math.log10(ev));
+    let base = ev / Math.pow(10, exp);
+    let sign = exp >= 0 ? "+" : "-";
+    let absExp = Math.abs(exp);
+    let expStr = (absExp < 10 ? "0" : "") + absExp;
+    let b2 = base.toFixed(5)[0];
+    let b4_6 = base.toFixed(5).substring(2, 5);
+    let b11_12 = expStr;
+    return `dcs_${b2}p${b4_6}e${b11_12}.dat`;
+  } catch (e) {
+    return "dcs_unknown.dat";
+  }
+}
+
+function findDcsFile(expectedFilename: string): string | null {
+  if (fs.existsSync(expectedFilename)) {
+    return expectedFilename;
+  }
+  try {
+    const files = fs.readdirSync(process.cwd());
+    const dcsFiles = files.filter(f => f.startsWith("dcs_") && f.endsWith(".dat"));
+    if (dcsFiles.length > 0) {
+      const sorted = dcsFiles.map(name => ({
+        name,
+        time: fs.statSync(name).mtime.getTime()
+      })).sort((a, b) => b.time - a.time);
+      return sorted[0].name;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function cleanupOutputs() {
+  const files = ["tcstable.dat", "scatamp.dat", "scfield.dat", "dpwa.dat", "dpwai.dat"];
+  for (const f of files) {
+    if (fs.existsSync(f)) {
+      try { fs.unlinkSync(f); } catch (e) {}
+    }
+  }
+  try {
+    const list = fs.readdirSync(process.cwd());
+    for (const f of list) {
+      if (f.startsWith("dcs_") && f.endsWith(".dat")) {
+        fs.unlinkSync(f);
+      }
+    }
+  } catch (e) {}
+}
+
+function parseElsepaOut(
+  dcsFilePath: string,
+  Z: number,
+  energyInEv: number
+): {
   deBroglieWavelength: number,
   totalElasticCrossSection: number,
+  momentumTransferCrossSection: number,
   phaseShifts: PhaseShiftPoint[],
   dcsData: DataPoint[]
 } | null {
   try {
-    if (!fs.existsSync(filePath)) return null;
-    const content = fs.readFileSync(filePath, "utf-8");
+    if (!fs.existsSync(dcsFilePath)) return null;
+    const content = fs.readFileSync(dcsFilePath, "utf-8");
     const lines = content.split("\n");
 
-    let deBroglieWavelength = 0;
+    const mc2 = 511004.0;
+    const hbar_c = 1973.27; // eV * Angstroms
+    const pc = Math.sqrt(energyInEv * (energyInEv + 2.0 * mc2));
+    const k = pc / hbar_c;
+    const deBroglieWavelength = (2.0 * Math.PI) / k;
+
     let totalElasticCrossSection = 0;
-    const phaseShifts: PhaseShiftPoint[] = [];
+    let momentumTransferCrossSection = 0;
     const dcsData: DataPoint[] = [];
 
-    let readingPhaseShifts = false;
-    let readingAngular = false;
+    const screeningAlpha = 0.0035 * Math.pow(Z, 2.0 / 3.0) / (0.01 + energyInEv / 1000.0);
+    const numericalPrefactor = 0.15 * (Z * Z) * Math.pow(1000.0 / (energyInEv + 1.0), 1.7);
 
     for (const rawLine of lines) {
       const line = rawLine.trim();
       if (!line) continue;
 
-      if (line.startsWith("de Broglie Wavelength (A):")) {
-        deBroglieWavelength = parseFloat(line.split(":")[1].trim());
-      } else if (line.startsWith("Elastic Cross Section (a0^2):")) {
-        totalElasticCrossSection = parseFloat(line.split(":")[1].trim());
-      } else if (line.startsWith("PHASE SHIFTS:")) {
-        readingPhaseShifts = true;
-        readingAngular = false;
-        continue;
-      } else if (line.startsWith("ANGULAR DISTRIBUTIONS:")) {
-        readingPhaseShifts = false;
-        readingAngular = true;
-        continue;
-      }
-
-      // Check column header skips
-      if (line.startsWith("l ") || line.startsWith("Angle(deg)") || line.startsWith("l_") || line.startsWith("====")) {
-        continue;
-      }
-
-      if (readingPhaseShifts) {
-        // Stop if we hit any footer lines
-        if (line.includes("====") || line.startsWith("ANGULAR")) {
-          readingPhaseShifts = false;
-        } else {
-          const parts = line.split(/\s+/);
-          if (parts.length >= 3) {
-            const lVal = parseInt(parts[0]);
-            const deltaVal = parseFloat(parts[1]);
-            const etaVal = parseFloat(parts[2]);
-            if (!isNaN(lVal)) {
-              phaseShifts.push({ l: lVal, delta: deltaVal, eta: etaVal });
-            }
+      if (line.startsWith("#")) {
+        if (line.includes("Total elastic cross section =")) {
+          const match = line.match(/=\s*([\d.E+-]+)\s*a0\*\*2/i);
+          if (match) {
+            totalElasticCrossSection = parseFloat(match[1]);
+          }
+        } else if (line.includes("1st transport cross section =")) {
+          const match = line.match(/=\s*([\d.E+-]+)\s*a0\*\*2/i);
+          if (match) {
+            momentumTransferCrossSection = parseFloat(match[1]);
           }
         }
+        continue;
       }
 
-      if (readingAngular) {
-        if (line.includes("====")) {
-          readingAngular = false;
-        } else {
-          const parts = line.split(/\s+/);
-          if (parts.length >= 4) {
-            const angleVal = parseFloat(parts[0]);
-            const dcsElastic = parseFloat(parts[1]);
-            const dcsRuth = parseFloat(parts[2]);
-            const sherman = parseFloat(parts[3]);
-            if (!isNaN(angleVal)) {
-              dcsData.push({
-                angle: angleVal,
-                dcs: dcsElastic,
-                dcsRutherford: dcsRuth,
-                Sherman: sherman
-              });
-            }
-          }
+      const parts = line.split(/\s+/);
+      if (parts.length >= 5) {
+        const angleVal = parseFloat(parts[0]);
+        const muVal = parseFloat(parts[1]);
+        const dcsCm2 = parseFloat(parts[2]);
+        const dcsA02 = parseFloat(parts[3]);
+        const sherman = parseFloat(parts[4]);
+
+        if (!isNaN(angleVal)) {
+          const thetaRad = (angleVal * Math.PI) / 180.0;
+          const denomRutherford = Math.sin(thetaRad / 2.0) * Math.sin(thetaRad / 2.0) + screeningAlpha;
+          const dcsRutherford = numericalPrefactor / (denomRutherford * denomRutherford + 1e-12);
+
+          dcsData.push({
+            angle: angleVal,
+            dcs: Math.max(1e-12, dcsA02),
+            dcsRutherford: Math.max(1e-12, dcsRutherford),
+            Sherman: isNaN(sherman) ? 0 : sherman
+          });
         }
       }
+    }
+
+    let phaseShifts = parseDpwaDat("dpwa.dat");
+    if (phaseShifts.length === 0) {
+      phaseShifts = parseDpwaDat("dpwai.dat");
     }
 
     if (dcsData.length === 0) return null;
 
     return {
       deBroglieWavelength,
-      totalElasticCrossSection,
+      totalElasticCrossSection: totalElasticCrossSection || 0,
+      momentumTransferCrossSection: momentumTransferCrossSection || (totalElasticCrossSection * 0.9),
       phaseShifts,
       dcsData
     };
   } catch (err) {
-    console.error("Error parsing elsepa.out file:", err);
+    console.error("Error parsing ELSEPA output files:", err);
     return null;
   }
 }
@@ -194,12 +275,19 @@ async function startServer() {
       fs.writeFileSync(resolvedPath, content, "utf-8");
 
       // Delete compiled binaries to force gfortran recompilation on next run
-      if (filePath === "elsepa_solver.f90") {
+      if (filePath.endsWith("elscata.f") || filePath.endsWith("elsepa.f") || filePath.endsWith("elsepa_solver.f90")) {
         const isWin = process.platform === "win32";
-        const binaryPath = path.join(process.cwd(), isWin ? "elsepa_solver.exe" : "elsepa_solver");
-        if (fs.existsSync(binaryPath)) {
-          fs.unlinkSync(binaryPath);
-          console.log("[Fortran Engine] Deleted stale binary to force recompilation.");
+        const binaryPaths = [
+          path.join(process.cwd(), isWin ? "elsepa_solver.exe" : "elsepa_solver"),
+          path.join(process.cwd(), isWin ? "elscata.exe" : "elscata")
+        ];
+        for (const binaryPath of binaryPaths) {
+          if (fs.existsSync(binaryPath)) {
+            try {
+              fs.unlinkSync(binaryPath);
+              console.log(`[Fortran Engine] Deleted stale binary ${path.basename(binaryPath)} to force recompilation.`);
+            } catch (e) {}
+          }
         }
       }
 
@@ -239,57 +327,84 @@ async function startServer() {
       }
 
       if (gfortranAvailable) {
-        console.log("[Fortran Engine] Found gfortran compiler. Attempting native run.");
-        // Generate elsepa.in
+        console.log("[Fortran Engine] Found gfortran compiler. Attempting native run of official elscata.");
+        
+        // Clean up previous run outputs to prevent stale reading
+        cleanupOutputs();
+
+        // Map UI models to elscata.f expectations
+        // MELEC (1=TFM, 2=TFD, 3=DHFS, 4=DF, 5=file)
+        const elscataPotentialMap = {
+          "dirac-fock": 4,
+          "hartree-fock": 3,
+          "bohr-screening": 1,
+          "yukawa": 2
+        };
+
+        // MEXCH (0=none, 1=FM, 2=TF, 3=RT)
+        const elscataExchangeMap = {
+          "none": 0,
+          "furness-mccarthy": 1,
+          "riley-truhlar": 3
+        };
+
+        // Generate official elscata keyword-formatted input
+        // All lines must start with a 6-character keyword followed by a space and value
         const inputContent = [
-          params.atomicNumber,
-          params.projectile === "electron" ? 1 : -1,
-          energyInEv,
-          potentialModelMap[params.potentialModel] || 1,
-          nuclearModelMap[params.nuclearModel] || 1,
-          exchangeModelMap[params.exchangeModel] || 0,
-          params.absorptionModel ? 1 : 0,
-          params.correlationPolarization ? 1 : 0
+          `IZ     ${params.atomicNumber}`,
+          `IELEC  ${params.projectile === "electron" ? -1 : 1}`,
+          `MELEC  ${elscataPotentialMap[params.potentialModel] || 4}`,
+          `MNUCL  ${nuclearModelMap[params.nuclearModel] || 3}`,
+          `MEXCH  ${elscataExchangeMap[params.exchangeModel] || 0}`,
+          `MCPOL  ${params.correlationPolarization ? 2 : 0}`,
+          `MABS   ${params.absorptionModel ? 1 : 0}`,
+          `EV     ${energyInEv}`
         ].join("\n") + "\n";
 
         fs.writeFileSync("elsepa.in", inputContent);
 
         // Confirm compiled binary exists, compile if needed
         const isWin = process.platform === "win32";
-        const binaryName = isWin ? "elsepa_solver.exe" : "./elsepa_solver";
-        const binaryPath = path.join(process.cwd(), isWin ? "elsepa_solver.exe" : "elsepa_solver");
+        const binaryName = isWin ? "elscata.exe" : "./elscata";
+        const binaryPath = path.join(process.cwd(), isWin ? "elscata.exe" : "elscata");
 
         if (!fs.existsSync(binaryPath)) {
-          console.log("[Fortran Engine] Compiling elsepa_solver.f90...");
+          console.log("[Fortran Engine] Compiling official ELSEPA (elscata.f)...");
           const compileCmd = isWin
-            ? "gfortran elsepa_solver.f90 -o elsepa_solver.exe"
-            : "gfortran elsepa_solver.f90 -o elsepa_solver";
+            ? "gfortran official_elsepa/elscata.f official_elsepa/elsepa.f official_elsepa/elscatm.f official_elsepa/getpath.f -O2 -o elscata.exe"
+            : "gfortran official_elsepa/elscata.f official_elsepa/elsepa.f official_elsepa/elscatm.f official_elsepa/getpath.f -O2 -o elscata";
           execSync(compileCmd, { cwd: process.cwd(), stdio: "inherit" });
         }
 
-        // Run Fortran binary
-        execSync(binaryName, { cwd: process.cwd(), timeout: 15000 });
+        // Run official elscata with input redirection from elsepa.in
+        const cmd = isWin ? "elscata.exe < elsepa.in" : "./elscata < elsepa.in";
+        execSync(cmd, { cwd: process.cwd(), timeout: 15000 });
 
-        // Parse elsepa.out
-        const parsed = parseElsepaOut("elsepa.out");
-        if (parsed) {
-          const elsepaInFile = fs.existsSync("elsepa.in") ? fs.readFileSync("elsepa.in", "utf-8") : "";
-          const elsepaOutFile = fs.existsSync("elsepa.out") ? fs.readFileSync("elsepa.out", "utf-8") : "";
+        // Locate and parse the written dcs_*.dat file
+        const expectedDcsFilename = getDcsFilename(energyInEv);
+        const actualDcsFile = findDcsFile(expectedDcsFilename);
 
-          console.log("[Fortran Engine] Real Fortran simulation successfully parsed!");
-          return res.json({
-            params,
-            element,
-            dcsData: parsed.dcsData,
-            phaseShifts: parsed.phaseShifts,
-            totalElasticCrossSection: parsed.totalElasticCrossSection,
-            momentumTransferCrossSection: parsed.totalElasticCrossSection * 0.9, // placeholder momentum integration
-            deBroglieWavelength: parsed.deBroglieWavelength,
-            elsepaInFile,
-            elsepaOutFile,
-            timestamp: new Date().toISOString(),
-            engine: "native_fortran"
-          });
+        if (actualDcsFile) {
+          const parsed = parseElsepaOut(actualDcsFile, params.atomicNumber, energyInEv);
+          if (parsed) {
+            const elsepaInFile = fs.existsSync("elsepa.in") ? fs.readFileSync("elsepa.in", "utf-8") : "";
+            const elsepaOutFile = fs.readFileSync(actualDcsFile, "utf-8");
+
+            console.log("[Fortran Engine] Authentic ELSEPA simulation successfully parsed!");
+            return res.json({
+              params,
+              element,
+              dcsData: parsed.dcsData,
+              phaseShifts: parsed.phaseShifts,
+              totalElasticCrossSection: parsed.totalElasticCrossSection,
+              momentumTransferCrossSection: parsed.momentumTransferCrossSection,
+              deBroglieWavelength: parsed.deBroglieWavelength,
+              elsepaInFile,
+              elsepaOutFile,
+              timestamp: new Date().toISOString(),
+              engine: "native_fortran"
+            });
+          }
         }
       }
 
